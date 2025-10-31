@@ -1,4 +1,4 @@
-name: WireGuard VPN (Simplified)
+name: WireGuard VPN (Guaranteed Fix)
 
 on:
   workflow_dispatch:
@@ -9,71 +9,71 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: System Setup and Dependency Installation
+      - name: System Setup and Key Generation
+        id: setup
         run: |
           sudo apt update -y
           sudo apt install -y wireguard qrencode curl iptables-persistent net-tools
-
-      - name: Generate Keys and Get Public IP
-        id: keys_ip
-        run: |
+          
           umask 077
           WG_HOST=$(curl -s icanhazip.com)
           
           # تولید کلیدهای لازم
           SERVER_PRIV=$(wg genkey)
           CLIENT_PRIV=$(wg genkey)
-          SERVER_PUB=$(echo "$SERVER_PRIV" | wg pubkey)
-          CLIENT_PUB=$(echo "$CLIENT_PRIV" | wg pubkey)
           
-          # ذخیره کلیدها و IP در خروجی مرحله برای استفاده در مراحل بعدی
+          # ذخیره کلیدها و IP در خروجی مرحله
           echo "SERVER_PRIV=$SERVER_PRIV" >> $GITHUB_OUTPUT
           echo "CLIENT_PRIV=$CLIENT_PRIV" >> $GITHUB_OUTPUT
-          echo "SERVER_PUB=$SERVER_PUB" >> $GITHUB_OUTPUT
+          echo "SERVER_PUB=$(echo $SERVER_PRIV | wg pubkey)" >> $GITHUB_OUTPUT
           echo "WG_HOST=$WG_HOST" >> $GITHUB_OUTPUT
 
-      - name: Configure Server (wg0.conf) and Enable Forwarding
+      - name: Create Configuration Files (Single Step)
         env:
-          SERVER_PRIV: ${{ steps.keys_ip.outputs.SERVER_PRIV }}
-          CLIENT_PUB: ${{ steps.keys_ip.outputs.CLIENT_PUB }}
+          SP: ${{ steps.setup.outputs.SERVER_PRIV }}
+          CP: ${{ steps.setup.outputs.CLIENT_PRIV }}
+          CPUB: $(echo ${{ steps.setup.outputs.CLIENT_PRIV }} | wg pubkey) # کلید عمومی کلاینت را اینجا محاسبه می کنیم
+          SPUB: ${{ steps.setup.outputs.SERVER_PUB }}
+          HOST: ${{ steps.setup.outputs.WG_HOST }}
+          
+          # ثابت ها
           WG_PORT: 51820
           WG_IF: wg0
-        run: |
-          # ساخت فایل کانفیگ سرور با استفاده از یک دستور echo مطمئن
-          echo "[Interface]" | sudo tee /etc/wireguard/wg0.conf
-          echo "PrivateKey = $SERVER_PRIV" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "Address = 10.0.0.1/24" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "ListenPort = $WG_PORT" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "PostUp = iptables -A FORWARD -i $WG_IF -j ACCEPT; iptables -A FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; sysctl -w net.ipv4.ip_forward=1" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "PostDown = iptables -D FORWARD -i $WG_IF -j ACCEPT; iptables -D FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "[Peer]" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "PublicKey = $CLIENT_PUB" | sudo tee -a /etc/wireguard/wg0.conf
-          echo "AllowedIPs = 10.0.0.2/32" | sudo tee -a /etc/wireguard/wg0.conf
-
-      - name: Configure Client (client.conf)
-        env:
-          CLIENT_PRIV: ${{ steps.keys_ip.outputs.CLIENT_PRIV }}
-          SERVER_PUB: ${{ steps.keys_ip.outputs.SERVER_PUB }}
-          WG_HOST: ${{ steps.keys_ip.outputs.WG_HOST }}
-          WG_PORT: 51820
+          
         run: |
           mkdir -p $HOME/wg
-          # ساخت فایل کانفیگ کلاینت
+          
+          # ساخت کانفیگ سرور (بدون فضای خالی اضافی)
+          sudo sh -c "echo \"[Interface]\" > /etc/wireguard/wg0.conf"
+          sudo sh -c "echo \"PrivateKey = $SP\" >> /etc/wireguard/wg0.conf"
+          sudo sh -c "echo \"Address = 10.0.0.1/24\" >> /etc/wireguard/wg0.conf"
+          sudo sh -c "echo \"ListenPort = $WG_PORT\" >> /etc/wireguard/wg0.conf"
+          # تنظیمات IPTable
+          sudo sh -c "echo \"PostUp = iptables -A FORWARD -i $WG_IF -j ACCEPT; iptables -A FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; sysctl -w net.ipv4.ip_forward=1\" >> /etc/wireguard/wg0.conf"
+          sudo sh -c "echo \"PostDown = iptables -D FORWARD -i $WG_IF -j ACCEPT; iptables -D FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE\" >> /etc/wireguard/wg0.conf"
+          
+          # اضافه کردن تنظیمات Peer به صورت ایمن
+          sudo sh -c "echo \"\" >> /etc/wireguard/wg0.conf"
+          sudo sh -c "echo \"[Peer]\" >> /etc/wireguard/wg0.conf"
+          sudo sh -c "echo \"PublicKey = $CPUB\" >> /etc/wireguard/wg0.conf" # این خط قبلا خطا میداد
+          sudo sh -c "echo \"AllowedIPs = 10.0.0.2/32\" >> /etc/wireguard/wg0.conf"
+
+
+          # ساخت کانفیگ کلاینت
           echo "[Interface]" > $HOME/wg/client.conf
-          echo "PrivateKey = $CLIENT_PRIV" >> $HOME/wg/client.conf
+          echo "PrivateKey = $CP" >> $HOME/wg/client.conf
           echo "Address = 10.0.0.2/24" >> $HOME/wg/client.conf
           echo "DNS = 8.8.8.8, 1.1.1.1" >> $HOME/wg/client.conf
           echo "" >> $HOME/wg/client.conf
           echo "[Peer]" >> $HOME/wg/client.conf
-          echo "PublicKey = $SERVER_PUB" >> $HOME/wg/client.conf
-          echo "Endpoint = $WG_HOST:$WG_PORT" >> $HOME/wg/client.conf
+          echo "PublicKey = $SPUB" >> $HOME/wg/client.conf
+          echo "Endpoint = $HOST:$WG_PORT" >> $HOME/wg/client.conf
           echo "AllowedIPs = 0.0.0.0/0" >> $HOME/wg/client.conf
           echo "PersistentKeepalive = 25" >> $HOME/wg/client.conf
 
       - name: Start WireGuard and Display Config
         env:
-          WG_HOST: ${{ steps.keys_ip.outputs.WG_HOST }}
+          WG_HOST: ${{ steps.setup.outputs.WG_HOST }}
         run: |
           sudo wg-quick up wg0
           
