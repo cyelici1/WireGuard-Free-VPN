@@ -1,102 +1,93 @@
-name: WireGuard VPN (6-Hour Free VPS)
+name: WireGuard VPN (Simplified)
 
 on:
-  # فعال سازی دستی از طریق دکمه "Run Workflow"
   workflow_dispatch:
 
 jobs:
-  vpn:
+  run-vpn:
     runs-on: ubuntu-latest
-    # حداکثر زمان اجرا 6 ساعت
     timeout-minutes: 360
 
     steps:
-      - name: System Setup and Package Installation
+      - name: System Setup and Dependency Installation
         run: |
           sudo apt update -y
-          # نصب WireGuard و qrencode (برای QR)
           sudo apt install -y wireguard qrencode curl iptables-persistent net-tools
 
-      - name: Key Generation and Environment Setup
+      - name: Generate Keys and Get Public IP
+        id: keys_ip
+        run: |
+          umask 077
+          WG_HOST=$(curl -s icanhazip.com)
+          
+          # تولید کلیدهای لازم
+          SERVER_PRIV=$(wg genkey)
+          CLIENT_PRIV=$(wg genkey)
+          SERVER_PUB=$(echo "$SERVER_PRIV" | wg pubkey)
+          CLIENT_PUB=$(echo "$CLIENT_PRIV" | wg pubkey)
+          
+          # ذخیره کلیدها و IP در خروجی مرحله برای استفاده در مراحل بعدی
+          echo "SERVER_PRIV=$SERVER_PRIV" >> $GITHUB_OUTPUT
+          echo "CLIENT_PRIV=$CLIENT_PRIV" >> $GITHUB_OUTPUT
+          echo "SERVER_PUB=$SERVER_PUB" >> $GITHUB_OUTPUT
+          echo "WG_HOST=$WG_HOST" >> $GITHUB_OUTPUT
+
+      - name: Configure Server (wg0.conf) and Enable Forwarding
+        env:
+          SERVER_PRIV: ${{ steps.keys_ip.outputs.SERVER_PRIV }}
+          CLIENT_PUB: ${{ steps.keys_ip.outputs.CLIENT_PUB }}
+          WG_PORT: 51820
+          WG_IF: wg0
+        run: |
+          # ساخت فایل کانفیگ سرور با استفاده از یک دستور echo مطمئن
+          echo "[Interface]" | sudo tee /etc/wireguard/wg0.conf
+          echo "PrivateKey = $SERVER_PRIV" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "Address = 10.0.0.1/24" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "ListenPort = $WG_PORT" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "PostUp = iptables -A FORWARD -i $WG_IF -j ACCEPT; iptables -A FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; sysctl -w net.ipv4.ip_forward=1" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "PostDown = iptables -D FORWARD -i $WG_IF -j ACCEPT; iptables -D FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "[Peer]" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "PublicKey = $CLIENT_PUB" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "AllowedIPs = 10.0.0.2/32" | sudo tee -a /etc/wireguard/wg0.conf
+
+      - name: Configure Client (client.conf)
+        env:
+          CLIENT_PRIV: ${{ steps.keys_ip.outputs.CLIENT_PRIV }}
+          SERVER_PUB: ${{ steps.keys_ip.outputs.SERVER_PUB }}
+          WG_HOST: ${{ steps.keys_ip.outputs.WG_HOST }}
+          WG_PORT: 51820
         run: |
           mkdir -p $HOME/wg
-          cd $HOME/wg
-          umask 077
-          
-          # تولید کلیدهای یکتا برای هر بار اجرا
-          wg genkey | tee server_private.key | wg pubkey > server_public.key
-          wg genkey | tee client_private.key | wg pubkey > client_public.key
-          
-          # ذخیره متغیرها در محیط GitHub برای استفاده در مراحل بعدی
-          WG_HOST=$(curl -s icanhazip.com) 
-          echo "SERVER_PRIV_KEY=$(cat server_private.key)" >> $GITHUB_ENV
-          echo "CLIENT_PRIV_KEY=$(cat client_private.key)" >> $GITHUB_ENV
-          echo "SERVER_PUB_KEY=$(cat server_public.key)" >> $GITHUB_ENV
-          echo "WG_HOST=$WG_HOST" >> $GITHUB_ENV
-
-      - name: Configure WireGuard Server (wg0.conf)
-        env:
-          SERVER_PRIV: ${{ env.SERVER_PRIV_KEY }}
-          CLIENT_PUB: ${{ env.CLIENT_PUB_KEY }}
-          WG_IF: wg0
-          WG_PORT: 51820
-        run: |
-          # استفاده از ساختار ایمن تر shell برای جلوگیری از خطای YAML
-          sudo sh -c 'cat << EOF > /etc/wireguard/wg0.conf
-[Interface]
-PrivateKey = ${SERVER_PRIV}
-Address = 10.0.0.1/24
-ListenPort = ${WG_PORT}
-PostUp = iptables -A FORWARD -i ${WG_IF} -j ACCEPT; iptables -A FORWARD -o ${WG_IF} -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; sysctl -w net.ipv4.ip_forward=1
-PostDown = iptables -D FORWARD -i ${WG_IF} -j ACCEPT; iptables -D FORWARD -o ${WG_IF} -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
-[Peer]
-PublicKey = ${{ env.CLIENT_PUB }}
-AllowedIPs = 10.0.0.2/32
-EOF'
-
-      - name: Configure WireGuard Client (client.conf)
-        env:
-          CLIENT_PRIV: ${{ env.CLIENT_PRIV_KEY }}
-          SERVER_PUB: ${{ env.SERVER_PUB_KEY }}
-          WG_HOST: ${{ env.WG_HOST }}
-          WG_PORT: 51820
-        run: |
-          cat << EOF > $HOME/wg/client.conf
-[Interface]
-PrivateKey = ${CLIENT_PRIV}
-Address = 10.0.0.2/24
-DNS = 8.8.8.8, 1.1.1.1
-
-[Peer]
-PublicKey = ${SERVER_PUB}
-Endpoint = ${WG_HOST}:${WG_PORT}
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25
-EOF
+          # ساخت فایل کانفیگ کلاینت
+          echo "[Interface]" > $HOME/wg/client.conf
+          echo "PrivateKey = $CLIENT_PRIV" >> $HOME/wg/client.conf
+          echo "Address = 10.0.0.2/24" >> $HOME/wg/client.conf
+          echo "DNS = 8.8.8.8, 1.1.1.1" >> $HOME/wg/client.conf
+          echo "" >> $HOME/wg/client.conf
+          echo "[Peer]" >> $HOME/wg/client.conf
+          echo "PublicKey = $SERVER_PUB" >> $HOME/wg/client.conf
+          echo "Endpoint = $WG_HOST:$WG_PORT" >> $HOME/wg/client.conf
+          echo "AllowedIPs = 0.0.0.0/0" >> $HOME/wg/client.conf
+          echo "PersistentKeepalive = 25" >> $HOME/wg/client.conf
 
       - name: Start WireGuard and Display Config
+        env:
+          WG_HOST: ${{ steps.keys_ip.outputs.WG_HOST }}
         run: |
           sudo wg-quick up wg0
           
           echo " "
           echo "--------------------------------------------------------"
-          echo "✅ VPN Server is Ready on IP: ${{ env.WG_HOST }}:51820"
+          echo "✅ VPN Server is Ready on IP: $WG_HOST:51820"
           echo "--------------------------------------------------------"
           echo " "
           echo "📱 Scan the QR Code below to connect:"
           echo " "
           qrencode -t ansiutf8 < $HOME/wg/client.conf
           echo " "
-          echo "--------------------------------------------------------"
           
-      - name: Upload client config (for download)
-        uses: actions/upload-artifact@v4
-        with:
-          name: wireguard-client-config
-          path: $HOME/wg/client.conf
-
       - name: Keep job alive (Sleep)
         run: |
           echo "Server will stay alive for 6 hours. To extend, run the workflow again."
-          # نگه داشتن سرور به مدت 5 ساعت و 55 دقیقه
           sleep 355m
