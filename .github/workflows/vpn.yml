@@ -1,4 +1,4 @@
-name: WireGuard VPN (Final, Whitespace Fixed)
+name: WireGuard VPN (Final, Key Display)
 
 on:
   workflow_dispatch:
@@ -24,23 +24,24 @@ jobs:
           echo "SERVER_PRIV=$SERVER_PRIV" >> $GITHUB_OUTPUT
           echo "CLIENT_PRIV=$CLIENT_PRIV" >> $GITHUB_OUTPUT
           echo "SERVER_PUB=$(echo $SERVER_PRIV | wg pubkey)" >> $GITHUB_OUTPUT
+          echo "CLIENT_PUB=$(echo $CLIENT_PRIV | wg pubkey)" >> $GITHUB_OUTPUT 
           echo "WG_HOST=$WG_HOST" >> $GITHUB_OUTPUT
 
-      - name: Create Configuration Files (Fixed Whitespace)
+      - name: Create Configuration Files
         env:
           SP: ${{ steps.setup.outputs.SERVER_PRIV }}
           CP: ${{ steps.setup.outputs.CLIENT_PRIV }}
           SPUB: ${{ steps.setup.outputs.SERVER_PUB }}
+          CPUB: ${{ steps.setup.outputs.CLIENT_PUB }}
           HOST: ${{ steps.setup.outputs.WG_HOST }}
           
-          # ثابت ها
           WG_PORT: 51820
           WG_IF: wg0
           
         run: |
           mkdir -p $HOME/wg
           
-          # ساخت کانفیگ سرور (با دستورات echo)
+          # ساخت کانفیگ سرور (بدون فضای خالی و مقاوم در برابر خطا)
           echo "[Interface]" > server.temp
           echo "PrivateKey = $SP" >> server.temp
           echo "Address = 10.0.0.1/24" >> server.temp
@@ -49,15 +50,13 @@ jobs:
           echo "PostDown = iptables -D FORWARD -i $WG_IF -j ACCEPT; iptables -D FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE" >> server.temp
           echo "" >> server.temp
           echo "[Peer]" >> server.temp
-          echo "PublicKey = $(echo $CP | wg pubkey)" >> server.temp
+          echo "PublicKey = $CPUB" >> server.temp
           echo "AllowedIPs = 10.0.0.2/32" >> server.temp
           
-          # 💡💡💡 این بخش جدید است: حذف فضاهای خالی با AWK 💡💡💡
-          # AWK فایل موقت را پردازش می کند و هر فضای خالی اضافی را حذف می کند
-          # سپس آن را در مسیر نهایی WireGuard کپی می کند.
+          # حذف فضاهای خالی و کپی در مسیر اصلی
           awk 'NF' server.temp | sudo tee /etc/wireguard/wg0.conf
 
-          # ساخت کانفیگ کلاینت
+          # ساخت کانفیگ کلاینت (برای qrcode)
           echo "[Interface]" > $HOME/wg/client.conf
           echo "PrivateKey = $CP" >> $HOME/wg/client.conf
           echo "Address = 10.0.0.2/24" >> $HOME/wg/client.conf
@@ -72,17 +71,24 @@ jobs:
       - name: Start WireGuard and Display Config
         env:
           WG_HOST: ${{ steps.setup.outputs.WG_HOST }}
+          CLIENT_PRIV: ${{ steps.setup.outputs.CLIENT_PRIV }}
+          SERVER_PUB: ${{ steps.setup.outputs.SERVER_PUB }}
+          
         run: |
-          # در این مرحله هیچ خطایی نباید رخ دهد
           sudo wg-quick up wg0
           
           echo " "
           echo "--------------------------------------------------------"
-          echo "✅ VPN Server is Ready on IP: $WG_HOST:51820"
+          echo "✅ VPN Server is Ready."
           echo "--------------------------------------------------------"
+          
+          echo "🔑 کلیدهای مورد نیاز برای ورود دستی (Manual Entry):"
+          echo "1. PrivateKey (Interface): ${CLIENT_PRIV}"
+          echo "2. PublicKey (Peer/Server): ${SERVER_PUB}"
+          echo "3. Endpoint (Server Address): ${WG_HOST}:51820"
           echo " "
-          echo "📱 Scan the QR Code below to connect:"
-          echo " "
+          
+          echo "📱 QR Code (قابل اسکن نیست، فقط برای نمایش):"
           qrencode -t ansiutf8 < $HOME/wg/client.conf
           echo " "
           
