@@ -1,4 +1,4 @@
-name: WireGuard VPN (Guaranteed Fix)
+name: WireGuard VPN (Final, Whitespace Fixed)
 
 on:
   workflow_dispatch:
@@ -18,21 +18,18 @@ jobs:
           umask 077
           WG_HOST=$(curl -s icanhazip.com)
           
-          # تولید کلیدهای لازم
           SERVER_PRIV=$(wg genkey)
           CLIENT_PRIV=$(wg genkey)
           
-          # ذخیره کلیدها و IP در خروجی مرحله
           echo "SERVER_PRIV=$SERVER_PRIV" >> $GITHUB_OUTPUT
           echo "CLIENT_PRIV=$CLIENT_PRIV" >> $GITHUB_OUTPUT
           echo "SERVER_PUB=$(echo $SERVER_PRIV | wg pubkey)" >> $GITHUB_OUTPUT
           echo "WG_HOST=$WG_HOST" >> $GITHUB_OUTPUT
 
-      - name: Create Configuration Files (Single Step)
+      - name: Create Configuration Files (Fixed Whitespace)
         env:
           SP: ${{ steps.setup.outputs.SERVER_PRIV }}
           CP: ${{ steps.setup.outputs.CLIENT_PRIV }}
-          CPUB: $(echo ${{ steps.setup.outputs.CLIENT_PRIV }} | wg pubkey) # کلید عمومی کلاینت را اینجا محاسبه می کنیم
           SPUB: ${{ steps.setup.outputs.SERVER_PUB }}
           HOST: ${{ steps.setup.outputs.WG_HOST }}
           
@@ -43,21 +40,22 @@ jobs:
         run: |
           mkdir -p $HOME/wg
           
-          # ساخت کانفیگ سرور (بدون فضای خالی اضافی)
-          sudo sh -c "echo \"[Interface]\" > /etc/wireguard/wg0.conf"
-          sudo sh -c "echo \"PrivateKey = $SP\" >> /etc/wireguard/wg0.conf"
-          sudo sh -c "echo \"Address = 10.0.0.1/24\" >> /etc/wireguard/wg0.conf"
-          sudo sh -c "echo \"ListenPort = $WG_PORT\" >> /etc/wireguard/wg0.conf"
-          # تنظیمات IPTable
-          sudo sh -c "echo \"PostUp = iptables -A FORWARD -i $WG_IF -j ACCEPT; iptables -A FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; sysctl -w net.ipv4.ip_forward=1\" >> /etc/wireguard/wg0.conf"
-          sudo sh -c "echo \"PostDown = iptables -D FORWARD -i $WG_IF -j ACCEPT; iptables -D FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE\" >> /etc/wireguard/wg0.conf"
+          # ساخت کانفیگ سرور (با دستورات echo)
+          echo "[Interface]" > server.temp
+          echo "PrivateKey = $SP" >> server.temp
+          echo "Address = 10.0.0.1/24" >> server.temp
+          echo "ListenPort = $WG_PORT" >> server.temp
+          echo "PostUp = iptables -A FORWARD -i $WG_IF -j ACCEPT; iptables -A FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; sysctl -w net.ipv4.ip_forward=1" >> server.temp
+          echo "PostDown = iptables -D FORWARD -i $WG_IF -j ACCEPT; iptables -D FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE" >> server.temp
+          echo "" >> server.temp
+          echo "[Peer]" >> server.temp
+          echo "PublicKey = $(echo $CP | wg pubkey)" >> server.temp
+          echo "AllowedIPs = 10.0.0.2/32" >> server.temp
           
-          # اضافه کردن تنظیمات Peer به صورت ایمن
-          sudo sh -c "echo \"\" >> /etc/wireguard/wg0.conf"
-          sudo sh -c "echo \"[Peer]\" >> /etc/wireguard/wg0.conf"
-          sudo sh -c "echo \"PublicKey = $CPUB\" >> /etc/wireguard/wg0.conf" # این خط قبلا خطا میداد
-          sudo sh -c "echo \"AllowedIPs = 10.0.0.2/32\" >> /etc/wireguard/wg0.conf"
-
+          # 💡💡💡 این بخش جدید است: حذف فضاهای خالی با AWK 💡💡💡
+          # AWK فایل موقت را پردازش می کند و هر فضای خالی اضافی را حذف می کند
+          # سپس آن را در مسیر نهایی WireGuard کپی می کند.
+          awk 'NF' server.temp | sudo tee /etc/wireguard/wg0.conf
 
           # ساخت کانفیگ کلاینت
           echo "[Interface]" > $HOME/wg/client.conf
@@ -75,6 +73,7 @@ jobs:
         env:
           WG_HOST: ${{ steps.setup.outputs.WG_HOST }}
         run: |
+          # در این مرحله هیچ خطایی نباید رخ دهد
           sudo wg-quick up wg0
           
           echo " "
