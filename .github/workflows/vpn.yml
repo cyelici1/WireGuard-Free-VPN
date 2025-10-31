@@ -1,4 +1,4 @@
-name: WireGuard VPN (Final, Key Display)
+name: WireGuard VPN (Final Working Code)
 
 on:
   workflow_dispatch:
@@ -24,7 +24,7 @@ jobs:
           echo "SERVER_PRIV=$SERVER_PRIV" >> $GITHUB_OUTPUT
           echo "CLIENT_PRIV=$CLIENT_PRIV" >> $GITHUB_OUTPUT
           echo "SERVER_PUB=$(echo $SERVER_PRIV | wg pubkey)" >> $GITHUB_OUTPUT
-          echo "CLIENT_PUB=$(echo $CLIENT_PRIV | wg pubkey)" >> $GITHUB_OUTPUT 
+          echo "CLIENT_PUB=$(echo $CLIENT_PRIV | wg pubkey)" >> $GITHUB_OUTPUT
           echo "WG_HOST=$WG_HOST" >> $GITHUB_OUTPUT
 
       - name: Create Configuration Files
@@ -41,13 +41,11 @@ jobs:
         run: |
           mkdir -p $HOME/wg
           
-          # ساخت کانفیگ سرور (بدون فضای خالی و مقاوم در برابر خطا)
+          # ساخت کانفیگ سرور (PostUp/PostDown حذف شدند تا در Bash اجرا شوند و خطای Rx: 0B حل شود)
           echo "[Interface]" > server.temp
           echo "PrivateKey = $SP" >> server.temp
           echo "Address = 10.0.0.1/24" >> server.temp
           echo "ListenPort = $WG_PORT" >> server.temp
-          echo "PostUp = iptables -A FORWARD -i $WG_IF -j ACCEPT; iptables -A FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; sysctl -w net.ipv4.ip_forward=1" >> server.temp
-          echo "PostDown = iptables -D FORWARD -i $WG_IF -j ACCEPT; iptables -D FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE" >> server.temp
           echo "" >> server.temp
           echo "[Peer]" >> server.temp
           echo "PublicKey = $CPUB" >> server.temp
@@ -56,7 +54,7 @@ jobs:
           # حذف فضاهای خالی و کپی در مسیر اصلی
           awk 'NF' server.temp | sudo tee /etc/wireguard/wg0.conf
 
-          # ساخت کانفیگ کلاینت (برای qrcode)
+          # ساخت کانفیگ کلاینت (برای کپی/پیست و QR)
           echo "[Interface]" > $HOME/wg/client.conf
           echo "PrivateKey = $CP" >> $HOME/wg/client.conf
           echo "Address = 10.0.0.2/24" >> $HOME/wg/client.conf
@@ -68,24 +66,29 @@ jobs:
           echo "AllowedIPs = 0.0.0.0/0" >> $HOME/wg/client.conf
           echo "PersistentKeepalive = 25" >> $HOME/wg/client.conf
 
-      - name: Start WireGuard and Display Config
+      - name: Start WireGuard and Setup Firewall
         env:
           WG_HOST: ${{ steps.setup.outputs.WG_HOST }}
-          CLIENT_PRIV: ${{ steps.setup.outputs.CLIENT_PRIV }}
-          SERVER_PUB: ${{ steps.setup.outputs.SERVER_PUB }}
+          WG_IF: wg0
           
         run: |
+          # 💡 اجرای sysctl قبل از wg-quick
+          sudo sysctl -w net.ipv4.ip_forward=1
           sudo wg-quick up wg0
+          
+          # 💡 اجرای قطعی دستورات NAT و فایروال بعد از شروع wg0
+          sudo iptables -A FORWARD -i ${WG_IF} -j ACCEPT
+          sudo iptables -A FORWARD -o ${WG_IF} -j ACCEPT
+          sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
           
           echo " "
           echo "--------------------------------------------------------"
-          echo "✅ VPN Server is Ready."
+          echo "✅ VPN Server is Ready. Copy the config below."
           echo "--------------------------------------------------------"
           
-          echo "🔑 کلیدهای مورد نیاز برای ورود دستی (Manual Entry):"
-          echo "1. PrivateKey (Interface): ${CLIENT_PRIV}"
-          echo "2. PublicKey (Peer/Server): ${SERVER_PUB}"
-          echo "3. Endpoint (Server Address): ${WG_HOST}:51820"
+          echo "📄 کانفیگ کامل client.conf (برای کپی/پیست ساده):"
+          echo " "
+          cat $HOME/wg/client.conf
           echo " "
           
           echo "📱 QR Code (قابل اسکن نیست، فقط برای نمایش):"
